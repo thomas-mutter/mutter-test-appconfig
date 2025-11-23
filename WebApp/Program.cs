@@ -14,7 +14,7 @@ public class Program
     private const string SettingName = "Ort";
     private const string FeatureName = "Test1";
 
-    public static void Main(string[] args)
+    public static async Task Main(string[] args)
     {
         WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
@@ -58,6 +58,7 @@ public class Program
         // Register Azure App Configuration services to enable runtime refresh
         builder.Services.AddAzureAppConfiguration();
         builder.Services.AddFeatureManagement();
+        builder.Services.AddHostedService<StatusWorker>();
 
         WebApplication app = builder.Build();
 
@@ -82,7 +83,7 @@ public class Program
         app.MapGet("/settings", GetConfigurationValuesAsync)
             .WithName("GetConfigurationValues");
 
-        app.Run();
+        await app.RunAsync();
     }
 
     private static async Task<Ok<AppConfigurationValues>> GetConfigurationValuesAsync(
@@ -92,10 +93,7 @@ public class Program
         CancellationToken cancellationToken)
     {
         bool test1 = await featureManager.IsEnabledAsync(FeatureName, cancellationToken);
-        var configValues = new AppConfigurationValues(option.Value.Ort, test1);
-
-        logger.LogInformation("Configuration Values: {@ConfigValues}", configValues);
-
+        AppConfigurationValues configValues = new(option.Value.Ort, test1, DateTimeOffset.Now);
         return TypedResults.Ok(configValues);
     }
 }
@@ -105,4 +103,75 @@ public class Settings
     public string Ort { get; set; } = string.Empty;
 }
 
-public record AppConfigurationValues(string Ort, bool Test1);
+public record AppConfigurationValues(string Ort, bool Test1, DateTimeOffset LastModified)
+{
+    public bool IsEqual(AppConfigurationValues other) =>
+        Ort.Equals(other.Ort, StringComparison.CurrentCultureIgnoreCase) &&
+        Test1 == other.Test1;
+
+    public bool IsNotEqual(AppConfigurationValues other) => !IsEqual(other);
+};
+
+public class StatusWorker(
+    IVariantFeatureManager featureManager,
+    IServiceProvider services) : BackgroundService
+{
+    private IVariantFeatureManager FeatureManager { get; } = featureManager;
+
+    private IServiceProvider Services { get; } = services;
+
+    private static AppConfigurationValues CurrentSettings { get; set; } = new AppConfigurationValues(string.Empty, false, DateTimeOffset.MinValue);
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                using IServiceScope scope = Services.CreateScope();
+                ILogger<StatusWorker> log = scope.ServiceProvider.GetRequiredService<ILogger<StatusWorker>>();
+                await RefreshConfigurationAsync(scope, log, stoppingToken);
+                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+            }
+            catch (TaskCanceledException)
+            {
+                // Ignore
+            }
+        }
+    }
+
+    private async Task RefreshConfigurationAsync(IServiceScope scope, ILogger<StatusWorker> log, CancellationToken stoppingToken)
+    {
+        // Obtain the IConfigurationRefresher from the provider and trigger a refresh.
+        // This causes the registered keys and feature flags to be checked and updated if changed.
+        try
+        {
+            IConfigurationRefresherProvider refresherProvider = scope.ServiceProvider.GetRequiredService<IConfigurationRefresherProvider>();
+            foreach (IConfigurationRefresher refresher in refresherProvider.Refreshers)
+            {
+                bool success = await refresher.TryRefreshAsync(stoppingToken);
+                if (success)
+                {
+                    IOptionsSnapshot<Settings> settingOptions = scope.ServiceProvider.GetRequiredService<IOptionsSnapshot<Settings>>();
+                    bool test1 = await FeatureManager.IsEnabledAsync("Test1", stoppingToken);
+                    AppConfigurationValues newConfigValues = new(settingOptions.Value.Ort, test1, DateTimeOffset.Now);
+
+                    if (CurrentSettings.LastModified == DateTimeOffset.MinValue ||
+                        newConfigValues.IsNotEqual(CurrentSettings))
+                    {
+                        log.LogInformation("Configuration changed from {@OldConfig} to {@NewConfig}", CurrentSettings, newConfigValues);
+                        CurrentSettings = newConfigValues;
+                    }
+                }
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            // Ignore
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Error while trying to refresh Azure App Configuration.");
+        }
+    }
+}
