@@ -27,14 +27,13 @@ public class Program
                     .Select("QuickStart:*", LabelFilter.Null)
                     .ConfigureRefresh(refreshOptions =>
                     {
-                        refreshOptions.Register($"{SettingSection}:{SettingName}", refreshAll: true)
-                            .SetRefreshInterval(TimeSpan.FromSeconds(10));
+                        refreshOptions.Register($"{SettingSection}:{SettingName}", refreshAll: true);
                     });
 
             azureAppConfigurationOptions.UseFeatureFlags(featureFlagOptions =>
             {
                 featureFlagOptions.Select(FeatureName, LabelFilter.Null);
-                featureFlagOptions.SetRefreshInterval(TimeSpan.FromSeconds(10));
+                //featureFlagOptions.SetRefreshInterval(TimeSpan.FromSeconds(10));
             });
         });
 
@@ -150,18 +149,20 @@ public class StatusWorker(
             foreach (IConfigurationRefresher refresher in refresherProvider.Refreshers)
             {
                 bool success = await refresher.TryRefreshAsync(stoppingToken);
-                if (success)
+                if (!success)
                 {
-                    IOptionsSnapshot<Settings> settingOptions = scope.ServiceProvider.GetRequiredService<IOptionsSnapshot<Settings>>();
-                    bool test1 = await FeatureManager.IsEnabledAsync("Test1", stoppingToken);
-                    AppConfigurationValues newConfigValues = new(settingOptions.Value.Ort, test1, DateTimeOffset.Now);
+                    continue;
+                }
 
-                    if (CurrentSettings.LastModified == DateTimeOffset.MinValue ||
-                        newConfigValues.IsNotEqual(CurrentSettings))
-                    {
-                        log.LogInformation("Configuration changed from {@OldConfig} to {@NewConfig}", CurrentSettings, newConfigValues);
-                        CurrentSettings = newConfigValues;
-                    }
+                IOptionsSnapshot<Settings> settingOptions = scope.ServiceProvider.GetRequiredService<IOptionsSnapshot<Settings>>();
+                bool test1 = await FeatureManager.IsEnabledAsync("Test1", stoppingToken);
+                AppConfigurationValues newConfigValues = new(settingOptions.Value.Ort, test1, DateTimeOffset.Now);
+
+                if (CurrentSettings.LastModified == DateTimeOffset.MinValue ||
+                    newConfigValues.IsNotEqual(CurrentSettings))
+                {
+                    CurrentSettings = newConfigValues;
+                    log.LogInformation("Configuration changed Ort={Ort}, Test1={Test1}", CurrentSettings.Ort, CurrentSettings.Test1);
                 }
             }
         }
