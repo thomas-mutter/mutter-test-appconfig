@@ -5,6 +5,8 @@ using Microsoft.Extensions.Configuration.AzureAppConfiguration;
 using Microsoft.Extensions.Options;
 using Microsoft.FeatureManagement;
 using Scalar.AspNetCore;
+using Serilog;
+using Serilog.Events;
 
 namespace TestAppConfig.WebApp;
 
@@ -16,7 +18,19 @@ public class Program
 
     public static async Task Main(string[] args)
     {
+        // Category: {SourceContext:l}
+        const string logTemplate = "[{Timestamp:HH:mm:ss} {Level:u3} {SourceContext:l}] {Message:lj}{NewLine}";
+        Log.Logger = new LoggerConfiguration().MinimumLevel.Debug()
+            .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
+            .MinimumLevel.Override("Azure", LogEventLevel.Warning)
+            .MinimumLevel.Override("System.Net.Http.HttpClient", LogEventLevel.Warning)
+            .Enrich.FromLogContext()
+            .WriteTo.Console(outputTemplate: logTemplate)
+            .CreateLogger();
+
         WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+
+        builder.Host.UseSerilog();
 
         builder.Configuration.AddAzureAppConfiguration(azureAppConfigurationOptions =>
         {
@@ -28,12 +42,13 @@ public class Program
                     .ConfigureRefresh(refreshOptions =>
                     {
                         refreshOptions.Register($"{SettingSection}:{SettingName}", refreshAll: true);
+                        refreshOptions.SetRefreshInterval(TimeSpan.FromSeconds(15));
                     });
 
             azureAppConfigurationOptions.UseFeatureFlags(featureFlagOptions =>
             {
                 featureFlagOptions.Select(FeatureName, LabelFilter.Null);
-                //featureFlagOptions.SetRefreshInterval(TimeSpan.FromSeconds(10));
+                featureFlagOptions.SetRefreshInterval(TimeSpan.FromSeconds(15));
             });
         });
 
@@ -57,7 +72,8 @@ public class Program
         // Register Azure App Configuration services to enable runtime refresh
         builder.Services.AddAzureAppConfiguration();
         builder.Services.AddFeatureManagement();
-        builder.Services.AddHostedService<StatusWorker>();
+
+        //builder.Services.AddHostedService<StatusWorker>();
 
         WebApplication app = builder.Build();
 
@@ -70,6 +86,13 @@ public class Program
         app.UseHttpsRedirection();
         // Enable automatic refresh of configuration and feature flags per request
         app.UseAzureAppConfiguration();
+
+        IOptionsMonitor<Settings> settingsMonitor = app.Services.GetRequiredService<IOptionsMonitor<Settings>>();
+        settingsMonitor.OnChange((settings) =>
+        {
+            ILogger<Program> logger = app.Services.GetRequiredService<ILogger<Program>>();
+            logger.LogInformation("Settings changed Ort={Ort}", settings.Ort);
+        });
 
         app.MapOpenApi("/openapi/{documentName}.yaml");
         app.MapScalarApiReference(options =>
@@ -112,12 +135,18 @@ public record AppConfigurationValues(string Ort, bool Test1, DateTimeOffset Last
 };
 
 public class StatusWorker(
+    IConfigurationRefresherProvider refresherProvider,
     IVariantFeatureManager featureManager,
-    IServiceProvider services) : BackgroundService
+    IOptionsMonitor<Settings> settingsMonitor,
+    ILogger<StatusWorker> log) : BackgroundService
 {
+    IConfigurationRefresherProvider RefresherProvider { get; } = refresherProvider;
+
     private IVariantFeatureManager FeatureManager { get; } = featureManager;
 
-    private IServiceProvider Services { get; } = services;
+    private IOptionsMonitor<Settings> SettingsMonitor { get; } = settingsMonitor;
+
+    private ILogger<StatusWorker> Log { get; } = log;
 
     private static AppConfigurationValues CurrentSettings { get; set; } = new AppConfigurationValues(string.Empty, false, DateTimeOffset.MinValue);
 
@@ -127,9 +156,7 @@ public class StatusWorker(
         {
             try
             {
-                using IServiceScope scope = Services.CreateScope();
-                ILogger<StatusWorker> log = scope.ServiceProvider.GetRequiredService<ILogger<StatusWorker>>();
-                await RefreshConfigurationAsync(scope, log, stoppingToken);
+                await RefreshConfigurationAsync(stoppingToken);
                 await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
             }
             catch (TaskCanceledException)
@@ -139,14 +166,13 @@ public class StatusWorker(
         }
     }
 
-    private async Task RefreshConfigurationAsync(IServiceScope scope, ILogger<StatusWorker> log, CancellationToken stoppingToken)
+    private async Task RefreshConfigurationAsync(CancellationToken stoppingToken)
     {
         // Obtain the IConfigurationRefresher from the provider and trigger a refresh.
         // This causes the registered keys and feature flags to be checked and updated if changed.
         try
         {
-            IConfigurationRefresherProvider refresherProvider = scope.ServiceProvider.GetRequiredService<IConfigurationRefresherProvider>();
-            foreach (IConfigurationRefresher refresher in refresherProvider.Refreshers)
+            foreach (IConfigurationRefresher refresher in RefresherProvider.Refreshers)
             {
                 bool success = await refresher.TryRefreshAsync(stoppingToken);
                 if (!success)
@@ -154,15 +180,14 @@ public class StatusWorker(
                     continue;
                 }
 
-                IOptionsSnapshot<Settings> settingOptions = scope.ServiceProvider.GetRequiredService<IOptionsSnapshot<Settings>>();
                 bool test1 = await FeatureManager.IsEnabledAsync("Test1", stoppingToken);
-                AppConfigurationValues newConfigValues = new(settingOptions.Value.Ort, test1, DateTimeOffset.Now);
+                AppConfigurationValues newConfigValues = new(SettingsMonitor.CurrentValue.Ort, test1, DateTimeOffset.Now);
 
                 if (CurrentSettings.LastModified == DateTimeOffset.MinValue ||
                     newConfigValues.IsNotEqual(CurrentSettings))
                 {
                     CurrentSettings = newConfigValues;
-                    log.LogInformation("Configuration changed Ort={Ort}, Test1={Test1}", CurrentSettings.Ort, CurrentSettings.Test1);
+                    Log.LogInformation("Configuration changed Ort={Ort}, Test1={Test1}", CurrentSettings.Ort, CurrentSettings.Test1);
                 }
             }
         }
