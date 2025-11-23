@@ -1,0 +1,7 @@
+###
+# Query OpenAPI specification
+GET https://localhost:7069/openapi/quickstart.yaml
+
+###
+# Get application settings
+GET https://localhost:7069/settings
