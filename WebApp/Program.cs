@@ -14,15 +14,16 @@ public class Program
     private const string SettingName = "Ort";
     private const string FeatureName = "Test1";
 
-    private static readonly Uri AppConfigUri = new("https://thomyconfig.azconfig.io");
-
     public static void Main(string[] args)
     {
         WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
         builder.Configuration.AddAzureAppConfiguration(azureAppConfigurationOptions =>
         {
-            azureAppConfigurationOptions.Connect(AppConfigUri, new DefaultAzureCredential())
+            string appConfigUrl = builder.Configuration["AppConfigUrl"]
+                ?? throw new InvalidOperationException("Please add AppConfigUrl to appsettings.json");
+
+            azureAppConfigurationOptions.Connect(new Uri(appConfigUrl), new DefaultAzureCredential())
                     .Select("QuickStart:*", LabelFilter.Null)
                     .ConfigureRefresh(refreshOptions =>
                     {
