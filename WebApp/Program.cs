@@ -35,7 +35,6 @@ public class Program
             {
                 featureFlagOptions.Select(FeatureName, LabelFilter.Null);
                 featureFlagOptions.SetRefreshInterval(TimeSpan.FromSeconds(10));
-                    
             });
         });
 
@@ -56,6 +55,8 @@ public class Program
 
         builder.Services.AddOptions();
         builder.Services.Configure<Settings>(builder.Configuration.GetSection(SettingSection));
+        // Register Azure App Configuration services to enable runtime refresh
+        builder.Services.AddAzureAppConfiguration();
         builder.Services.AddFeatureManagement();
 
         WebApplication app = builder.Build();
@@ -67,6 +68,8 @@ public class Program
         }
 
         app.UseHttpsRedirection();
+        // Enable automatic refresh of configuration and feature flags per request
+        app.UseAzureAppConfiguration();
 
         app.MapOpenApi("/openapi/{documentName}.yaml");
         app.MapScalarApiReference(options =>
