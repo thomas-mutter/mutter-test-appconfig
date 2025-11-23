@@ -85,10 +85,14 @@ public class Program
     private static async Task<Ok<AppConfigurationValues>> GetConfigurationValuesAsync(
         [FromServices] IOptionsSnapshot<Settings> option,
         [FromServices] IVariantFeatureManager featureManager,
+        [FromServices] ILogger<Program> logger,
         CancellationToken cancellationToken)
     {
         bool test1 = await featureManager.IsEnabledAsync(FeatureName, cancellationToken);
         var configValues = new AppConfigurationValues(option.Value.Ort, test1);
+
+        logger.LogInformation("Configuration Values: {@ConfigValues}", configValues);
+
         return TypedResults.Ok(configValues);
     }
 }
