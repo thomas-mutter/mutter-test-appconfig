@@ -1,0 +1,14 @@
+{
+    "id": "6dbd2b1e-0bb1-4c49-9410-95b8b8c9bd34",
+    "source": "/subscriptions/b0c87387-c7ea-464a-a1b9-14cb161c4a1d/resourceGroups/test-app-config/providers/microsoft.appconfiguration/configurationstores/thomy-appconfig",
+    "specversion": "1.0",
+    "type": "Microsoft.AppConfiguration.KeyValueModified",
+    "subject": "https://thomy-appconfig.azconfig.io/kv/.appconfig.featureflag%2Fmy-worker-is-running?label=%00&api-version=2023-11-01",
+    "time": "2025-11-30T15:36:21Z",
+    "data": {
+        "key": ".appconfig.featureflag/my-worker-is-running",
+        "label": null,
+        "etag": "uwzzpNj2WZVmljR8aj-L7AmPJhsfuu9mZn532Av4Ovc",
+        "syncToken": "zAJw6V16=MTQ6MTkjNTM0NTUzODU=;sn=53455385"
+    }
+}
