@@ -1,4 +1,4 @@
-﻿using Azure.Messaging;
+using Azure.Messaging;
 using Azure.Messaging.EventGrid;
 using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
@@ -6,6 +6,7 @@ using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration.AzureAppConfiguration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using SwissLife.Slkv.Framework.Extensions.ServiceBus.Administration;
 using WorkerApp.Configuration;
 
 namespace WorkerApp;
@@ -24,7 +25,7 @@ public class AppConfigEventRefreshWorker(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         ServiceBusAdministrationClient adminClient = adminClientFactory.CreateClient(ServiceBusClientName);
-        await EnsureTopicSubscriptionAsync(adminClient);
+        await adminClient.EnsureSubscriptionAsync(appConfig.ChangeNotificationTopicName, WorkerIdentifier, null, null, log, stoppingToken);
 
         ServiceBusClient serviceBusClient = serviceBusClientFactory.CreateClient(ServiceBusClientName);
 
