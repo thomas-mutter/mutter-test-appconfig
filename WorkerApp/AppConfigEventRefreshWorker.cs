@@ -1,9 +1,9 @@
-using Azure.Messaging;
 using Azure.Messaging.EventGrid;
 using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using Microsoft.Extensions.Azure;
 using Microsoft.Extensions.Configuration.AzureAppConfiguration;
+using Microsoft.Extensions.Configuration.AzureAppConfiguration.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SwissLife.Slkv.Framework.Extensions.ServiceBus.Administration;
@@ -15,19 +15,20 @@ public class AppConfigEventRefreshWorker(
     IAzureClientFactory<ServiceBusClient> serviceBusClientFactory,
     IAzureClientFactory<ServiceBusAdministrationClient> adminClientFactory,
     AppConfig appConfig,
-    IConfigurationRefresherProvider refreshProvider,
+    IConfigurationRefresher refresher,
     ILogger<AppConfigEventRefreshWorker> log) : BackgroundService
 {
     public static string ServiceBusClientName => "ConfigRefresh";
+
+    private readonly ServiceBusAdministrationClient adminClient = adminClientFactory.CreateClient(ServiceBusClientName);
+
+    private readonly ServiceBusClient serviceBusClient = serviceBusClientFactory.CreateClient(ServiceBusClientName);
 
     private ServiceBusProcessor? Processor { get; set; }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        ServiceBusAdministrationClient adminClient = adminClientFactory.CreateClient(ServiceBusClientName);
         await adminClient.EnsureSubscriptionAsync(appConfig.ChangeNotificationTopicName, WorkerIdentifier, null, null, log, stoppingToken);
-
-        ServiceBusClient serviceBusClient = serviceBusClientFactory.CreateClient(ServiceBusClientName);
 
         ServiceBusProcessorOptions options = new()
         {
@@ -51,20 +52,16 @@ public class AppConfigEventRefreshWorker(
     {
         try
         {
-            CloudEvent ce = CloudEvent.Parse(arg.Message.Body)
-                ?? throw new InvalidOperationException("Message body does not contain a cloud event!");
+            // Build an EventGridEvent instance from the notification message.
+            EventGridEvent eventGridEvent = EventGridEvent.Parse(BinaryData.FromBytes(arg.Message.Body));
 
-            ce.TryGetSystemEventData(out object eventData);
+            // Create a PushNotification instance from the Event Grid event.
+            eventGridEvent.TryCreatePushNotification(out PushNotification pushNotification);
 
-            AppConfigChanged configChangedEvent = ce.Data?.ToObjectFromJson<AppConfigChanged>()
-                ?? throw new InvalidOperationException("Cloud event does not contain app config event data!");
+            // Prompt a configuration refresh based on the push notification.
+            refresher.ProcessPushNotification(pushNotification);
 
-            log.LogInformation("Received app config changed event for {Entity}", configChangedEvent.Key);
-
-            foreach (IConfigurationRefresher refresher in refreshProvider.Refreshers)
-            {
-                await refresher.TryRefreshAsync(default);
-            }
+            log.LogInformation("Received app config changed event for {Uri}", pushNotification.ResourceUri);
         }
         catch (Exception ex)
         {
@@ -82,23 +79,9 @@ public class AppConfigEventRefreshWorker(
 
         await Processor.StopProcessingAsync(cancellationToken);
         log.LogInformation("FeatureEventRefreshWorker has stopped.");
+
+        await adminClient.DeleteSubscriptionAsync(appConfig.ChangeNotificationTopicName, WorkerIdentifier, cancellationToken);
     }
 
-    private async Task EnsureTopicSubscriptionAsync(ServiceBusAdministrationClient adminClient)
-    {
-
-    }
-
-    private static string WorkerIdentifier => $"{Environment.MachineName}-{Environment.ProcessId}";
-
-    public class AppConfigChanged
-    {
-        public string Key { get; set; } = string.Empty;
-
-        public string? Label { get; set; }
-
-        public string? ETag { get; set; }
-
-        public string? SyncToken { get; set; }
-    }
+    private static string WorkerIdentifier => $"{Environment.MachineName}-{Environment.ProcessId}".ToLowerInvariant();
 }

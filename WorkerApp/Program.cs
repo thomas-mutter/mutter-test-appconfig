@@ -20,7 +20,7 @@ public class Program
         const string logTemplate = "[{Timestamp:HH:mm:ss} {Level:u3} {SourceContext:l}] {Message:lj}{NewLine}";
         Log.Logger = new LoggerConfiguration().MinimumLevel.Debug()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Information)
-            .MinimumLevel.Override("Azure", LogEventLevel.Information)
+            .MinimumLevel.Override("Azure", LogEventLevel.Warning)
             .MinimumLevel.Override("System.Net.Http.HttpClient", LogEventLevel.Warning)
             .Enrich.FromLogContext()
             .WriteTo.Console(outputTemplate: logTemplate)
@@ -55,6 +55,9 @@ public class Program
                     featureFlagOptions.Select(Worker.FeatureName, LabelFilter.Null);
                     featureFlagOptions.SetRefreshInterval(TimeSpan.FromDays(1));
                 });
+
+                IConfigurationRefresher configRefresher = options.GetRefresher();
+                hostingContext.Properties[nameof(IConfigurationRefresher)] = configRefresher;
             });
         });
 
@@ -62,6 +65,12 @@ public class Program
         {
             AppConfig appConfig = hostContext.Configuration.GetAppConfig();
             services.AddSingleton(appConfig);
+
+            if (hostContext.Properties.TryGetValue(nameof(IConfigurationRefresher), out object? refresherObj) &&
+                refresherObj is IConfigurationRefresher configRefresher)
+            {
+                services.AddSingleton(configRefresher);
+            }
 
             services.AddAzureAppConfiguration();
             services.AddFeatureManagement();
@@ -71,6 +80,9 @@ public class Program
                 builder.UseCredential(new DefaultAzureCredential());
                 builder
                     .AddServiceBusClientWithNamespace(appConfig.ChangeNotificationServiceBusNamespace)
+                    .WithName(AppConfigEventRefreshWorker.ServiceBusClientName);
+                builder
+                    .AddServiceBusAdministrationClientWithNamespace(appConfig.ChangeNotificationServiceBusNamespace)
                     .WithName(AppConfigEventRefreshWorker.ServiceBusClientName);
             });
 
