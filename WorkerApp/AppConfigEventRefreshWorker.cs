@@ -15,7 +15,7 @@ public class AppConfigEventRefreshWorker(
     IAzureClientFactory<ServiceBusClient> serviceBusClientFactory,
     IAzureClientFactory<ServiceBusAdministrationClient> adminClientFactory,
     AppConfig appConfig,
-    IConfigurationRefresher refresher,
+    IConfigurationRefresherProvider refreshProvider,
     ILogger<AppConfigEventRefreshWorker> log) : BackgroundService
 {
     public static string ServiceBusClientName => "ConfigRefresh";
@@ -56,12 +56,18 @@ public class AppConfigEventRefreshWorker(
             EventGridEvent eventGridEvent = EventGridEvent.Parse(BinaryData.FromBytes(arg.Message.Body));
 
             // Create a PushNotification instance from the Event Grid event.
-            eventGridEvent.TryCreatePushNotification(out PushNotification pushNotification);
+            if (!eventGridEvent.TryCreatePushNotification(out PushNotification? pushNotification) || pushNotification == null)
+            {
+                log.LogWarning("Received EventGridEvent could not be transformed into PushNotification. Event subject={Subject}", eventGridEvent.Subject);
+                return;
+            }
 
-            // Prompt a configuration refresh based on the push notification.
-            refresher.ProcessPushNotification(pushNotification);
+            foreach (IConfigurationRefresher? refresher in refreshProvider.Refreshers)
+            {
+                await refresher.TryRefreshAsync();
+            }
 
-            log.LogInformation("Received app config changed event for {Uri}", pushNotification.ResourceUri);
+            log.LogInformation("Received app config changed event for {Uri}.", pushNotification.ResourceUri);
         }
         catch (Exception ex)
         {

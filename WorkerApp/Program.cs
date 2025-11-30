@@ -53,11 +53,8 @@ public class Program
                 options.UseFeatureFlags(featureFlagOptions =>
                 {
                     featureFlagOptions.Select(Worker.FeatureName, LabelFilter.Null);
-                    featureFlagOptions.SetRefreshInterval(TimeSpan.FromDays(1));
+                    featureFlagOptions.SetRefreshInterval(TimeSpan.FromSeconds(1));
                 });
-
-                IConfigurationRefresher configRefresher = options.GetRefresher();
-                hostingContext.Properties[nameof(IConfigurationRefresher)] = configRefresher;
             });
         });
 
@@ -65,16 +62,8 @@ public class Program
         {
             AppConfig appConfig = hostContext.Configuration.GetAppConfig();
             services.AddSingleton(appConfig);
-
-            if (hostContext.Properties.TryGetValue(nameof(IConfigurationRefresher), out object? refresherObj) &&
-                refresherObj is IConfigurationRefresher configRefresher)
-            {
-                services.AddSingleton(configRefresher);
-            }
-
             services.AddAzureAppConfiguration();
             services.AddFeatureManagement();
-
             services.AddAzureClients(builder =>
             {
                 builder.UseCredential(new DefaultAzureCredential());
@@ -85,7 +74,6 @@ public class Program
                     .AddServiceBusAdministrationClientWithNamespace(appConfig.ChangeNotificationServiceBusNamespace)
                     .WithName(AppConfigEventRefreshWorker.ServiceBusClientName);
             });
-
             services.AddHostedService<AppConfigEventRefreshWorker>();
             services.AddHostedService<Worker>();
         });
@@ -94,4 +82,3 @@ public class Program
         await host.RunAsync();
     }
 }
-
